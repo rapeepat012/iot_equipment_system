@@ -1,0 +1,18 @@
+# Backend files (should not deploy to Vercel)
+api/
+*.php
+*.sql
+composer.json
+composer.lock
+.render-buildpack.txt
+
+# Database and config
+config.php
+Connect.php
+storage/
+
+# Development
+.env
+.env.local
+node_modules/
+
