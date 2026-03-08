@@ -339,13 +339,13 @@ export const Dashboard: React.FC = () => {
                   const monthNames = ['มกราคม', 'กุมภาพันธ์', 'มีนาคม', 'เมษายน', 'พฤษภาคม', 'มิถุนายน',
                     'กรกฎาคม', 'สิงหาคม', 'กันยายน', 'ตุลาคม', 'พฤศจิกายน', 'ธันวาคม'];
                   const month = monthNames[now.getMonth()];
-                  const year = now.getFullYear() + 543; // Convert to Buddhist Era
+                  const year = now.getFullYear() + 543;
                   const time = now.toLocaleTimeString('th-TH', {
                     hour: '2-digit',
                     minute: '2-digit',
                     hour12: false
                   });
-                  return `วันที่ ${day} ${month} ${year} เวลา ${time} น.`;
+                  return `วันที่ ${day} ${month} ${year} เวลา ${time}`;
                 })()}
               </div>
             </div>
