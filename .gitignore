@@ -25,6 +25,7 @@ dist-ssr
 
 # Environment and config files
 config.php
+composer.phar
 .env
 .env.local
 .env.production

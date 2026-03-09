@@ -1,9 +1,9 @@
 import React, { useEffect, useState } from "react";
 import { MainLayout, SlideInPanel } from '../../components/Layout';
 import { EditUserForm } from "../../components/users";
-import apiService, { User } from "../../services/api";
+import apiService, { User, API_BASE_URL } from "../../services/api";
 import { Card } from "../../components/ui/card";
-import { ChevronLeft, ChevronRight, Inbox } from "lucide-react";
+import { ChevronLeft, ChevronRight, Inbox, Download } from "lucide-react";
 import SearchInput from "../../components/ui/SearchInput";
 import PageSizeSelect from "../../components/ui/PageSizeSelect";
 import Swal from 'sweetalert2';
@@ -31,6 +31,44 @@ export const Users: React.FC = () => {
   const [editError, setEditError] = useState<string | null>(null);
   const { user: currentUser, logout } = useAuth();
   const navigate = useNavigate();
+  const [backupLoading, setBackupLoading] = useState(false);
+
+  const handleBackup = async () => {
+    try {
+      setBackupLoading(true);
+      const token = localStorage.getItem('token') || '';
+      const url = `${API_BASE_URL}/backup.php?token=${encodeURIComponent(token)}`;
+      console.log('[Backup] Fetching URL:', url);
+
+      const response = await fetch(url, { method: 'GET' });
+
+      if (!response.ok) {
+        const err = await response.json().catch(() => ({ message: 'เกิดข้อผิดพลาดในการ backup' }));
+        throw new Error(err.message || 'เกิดข้อผิดพลาดในการ backup');
+      }
+
+      const blob = await response.blob();
+      const dateSlug = new Date().toISOString().slice(0, 10);
+      const filename = `backup_${dateSlug}.sql`;
+      const link = document.createElement('a');
+      link.href = URL.createObjectURL(blob);
+      link.download = filename;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(link.href);
+    } catch (e: any) {
+      Swal.fire({
+        title: 'Backup ไม่สำเร็จ',
+        text: e.message || 'เกิดข้อผิดพลาดในการ backup ข้อมูล',
+        icon: 'error',
+        confirmButtonText: 'ตกลง',
+        confirmButtonColor: '#0EA5E9',
+      });
+    } finally {
+      setBackupLoading(false);
+    }
+  };
 
   // Pagination state
   const [itemsPerPage, setItemsPerPage] = useState(50);
@@ -86,7 +124,25 @@ export const Users: React.FC = () => {
               />
             </div>
 
-            {/* Add Button removed */}
+            {/* Backup Button (Admin only) */}
+            {currentUser?.role === 'admin' && (
+              <button
+                onClick={handleBackup}
+                disabled={backupLoading}
+                title="Backup ฐานข้อมูลทุกตาราง"
+                className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-gray-600 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 hover:border-gray-400 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+              >
+                {backupLoading ? (
+                  <svg className="w-3.5 h-3.5 animate-spin" fill="none" viewBox="0 0 24 24">
+                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                  </svg>
+                ) : (
+                  <Download className="w-3.5 h-3.5" />
+                )}
+                {backupLoading ? 'กำลัง Backup...' : 'Backup DB'}
+              </button>
+            )}
           </div>
 
           {/* Pagination Controls */}
