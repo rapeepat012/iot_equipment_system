@@ -29,27 +29,31 @@ export const Dashboard: React.FC = () => {
     }
   }, [showModal]);
 
-  // ดึงข้อมูลจริงจาก API
+  const [requests, setRequests] = useState<any[]>([]);
+
+  // ดึงข้อมูลจริงจาก API (ผู้ใช้, อุปกรณ์, คำขอยืม)
   useEffect(() => {
-    const fetchStats = async () => {
+    const fetchDashboardData = async () => {
       try {
         setStats(prev => ({ ...prev, loading: true }));
 
-        // ดึงข้อมูลผู้ใช้
-        const usersResponse = await apiService.listUsers();
-        const totalUsers = usersResponse.data.users.length;
+        // ใช้ Promise.all ดึงข้อมูลพร้อมกันทั้งหมดเพื่อลดระยะเวลารอ
+        const [usersResponse, equipmentResponse, requestsResponse] = await Promise.all([
+          apiService.listUsers(),
+          apiService.listEquipment(),
+          apiService.listBorrowRequests()
+        ]);
 
-        // ดึงข้อมูลอุปกรณ์
-        const equipmentResponse = await apiService.listEquipment();
-        const equipment = equipmentResponse.data.equipment;
+        const totalUsers = usersResponse.data.users?.length || 0;
+        const equipment = equipmentResponse.data.equipment || [];
         const totalEquipment = equipment.length;
 
-        // คำนวณอุปกรณ์ที่พร้อมยืม
+        setRequests(requestsResponse.data.requests || []);
+
         const availableEquipment = equipment.filter(eq =>
           eq.status === 'available' && eq.quantity_available > 0
         ).length;
 
-        // คำนวณอุปกรณ์ที่ถูกยืม (จำลอง)
         const borrowedEquipment = equipment.filter(eq =>
           eq.status === 'borrowed' || eq.quantity_available < eq.quantity_total
         ).length;
@@ -62,26 +66,25 @@ export const Dashboard: React.FC = () => {
           loading: false
         });
       } catch (error) {
-        console.error('Error fetching stats:', error);
+        console.error('Error fetching dashboard stats:', error);
         setStats(prev => ({ ...prev, loading: false }));
       }
     };
 
-    fetchStats();
-  }, []);
+    fetchDashboardData();
 
-
-  // Borrow requests for chart, today count, recent activities
-  const [requests, setRequests] = useState<any[]>([]);
-  useEffect(() => {
-    const fetch = async () => {
+    // ดึงข้อมูลคำขอยืมเพื่ออัปเดตแบบ polling
+    const fetchRequestsOnly = async () => {
       try {
         const res = await apiService.listBorrowRequests();
-        setRequests(res.data.requests || []);
+        if (res.data?.requests) {
+          setRequests(res.data.requests);
+        }
       } catch { }
     };
-    fetch();
-    const t = setInterval(fetch, 15000);
+
+    // ลดความถี่การยิง API ลงจาก 15s เป็น 60s 
+    const t = setInterval(fetchRequestsOnly, 60000);
     return () => clearInterval(t);
   }, []);
 
@@ -497,7 +500,7 @@ export const Dashboard: React.FC = () => {
           <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-6 animate-fade-in-up" style={{ animationDelay: '800ms' }}>
             <h3 className="text-lg font-semibold text-gray-900 mb-4 flex items-center gap-2">
               <Activity className="h-5 w-5 text-red-500" />
-              อุปกรณ์เสียหายเยอะที่สุด (Top 5)
+              อุปกรณ์ศูนย์หายเยอะที่สุด (Top 5)
             </h3>
             <div className="space-y-3">
               {statsLoading ? (

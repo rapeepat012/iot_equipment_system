@@ -33,12 +33,14 @@ try {
         default:
             Response::error('Method not allowed', 405);
     }
-} catch (Throwable $e) {
+}
+catch (Throwable $e) {
     error_log("Borrow Request API error: " . $e->getMessage());
     Response::error('Server error', 500);
 }
 
-function listBorrowRequests($conn) {
+function listBorrowRequests($conn)
+{
     $stmt = $conn->prepare('
         SELECT 
             br.id,
@@ -61,33 +63,54 @@ function listBorrowRequests($conn) {
     $stmt->execute();
     $requests = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
+    if (empty($requests)) {
+        Response::success('ดึงข้อมูลคำขอยืมสำเร็จ', ['requests' => []]);
+        return;
+    }
+
+    $requestIds = array_column($requests, 'id');
+    $placeholders = implode(',', array_fill(0, count($requestIds), '?'));
+
+    $itemsStmt = $conn->prepare("
+        SELECT 
+            bri.id,
+            bri.request_id,
+            bri.equipment_id,
+            e.name as equipment_name,
+            e.category,
+            bri.quantity_requested,
+            bri.quantity_approved
+        FROM borrow_request_items bri
+        JOIN equipment e ON bri.equipment_id = e.id
+        WHERE bri.request_id IN ($placeholders)
+    ");
+    $itemsStmt->execute($requestIds);
+    $allItems = $itemsStmt->fetchAll(PDO::FETCH_ASSOC);
+
+    // Group items by request_id
+    $itemsByRequestId = [];
+    foreach ($allItems as $item) {
+        $reqId = $item['request_id'];
+        unset($item['request_id']); // remove request_id to match original output mapping
+        $itemsByRequestId[$reqId][] = $item;
+    }
+
+    // Assign items back
     foreach ($requests as &$request) {
-        $itemsStmt = $conn->prepare('
-            SELECT 
-                bri.id,
-                bri.equipment_id,
-                e.name as equipment_name,
-                e.category,
-                bri.quantity_requested,
-                bri.quantity_approved
-            FROM borrow_request_items bri
-            JOIN equipment e ON bri.equipment_id = e.id
-            WHERE bri.request_id = ?
-        ');
-        $itemsStmt->execute([$request['id']]);
-        $request['items'] = $itemsStmt->fetchAll(PDO::FETCH_ASSOC);
+        $request['items'] = $itemsByRequestId[$request['id']] ?? [];
     }
 
     Response::success('ดึงข้อมูลคำขอยืมสำเร็จ', ['requests' => $requests]);
 }
 
-function createBorrowRequest($conn, $input) {
+function createBorrowRequest($conn, $input)
+{
     if (!isset($input['user_id']) || !isset($input['borrow_date']) || !isset($input['return_date']) || !isset($input['items'])) {
         Response::error('ข้อมูลไม่ครบถ้วน', 400);
     }
 
     $conn->beginTransaction();
-    
+
     try {
         // Create borrow request
         $requestId = dbInsertAndGetId(
@@ -96,14 +119,14 @@ function createBorrowRequest($conn, $input) {
             INSERT INTO borrow_requests (user_id, borrow_date, return_date, notes) 
             VALUES (?, ?, ?, ?)
             ',
-            [
-                $input['user_id'],
-                $input['borrow_date'],
-                $input['return_date'],
-                $input['notes'] ?? null
-            ]
+        [
+            $input['user_id'],
+            $input['borrow_date'],
+            $input['return_date'],
+            $input['notes'] ?? null
+        ]
         );
-        
+
         // Create request items
         foreach ($input['items'] as $item) {
             $itemStmt = $conn->prepare('
@@ -116,9 +139,9 @@ function createBorrowRequest($conn, $input) {
                 $item['quantity']
             ]);
         }
-        
+
         $conn->commit();
-        
+
         // Get created request with details
         $stmt = $conn->prepare('
             SELECT 
@@ -138,27 +161,29 @@ function createBorrowRequest($conn, $input) {
         ');
         $stmt->execute([$requestId]);
         $request = $stmt->fetch(PDO::FETCH_ASSOC);
-        
+
         Response::success('ส่งคำขอยืมสำเร็จ', ['request' => $request], 201);
-        
-    } catch (Exception $e) {
+
+    }
+    catch (Exception $e) {
         $conn->rollBack();
         throw $e;
     }
 }
 
-function updateBorrowRequest($conn, $input) {
+function updateBorrowRequest($conn, $input)
+{
     if (!isset($input['id']) || !is_numeric($input['id'])) {
         Response::error('ต้องระบุ ID คำขอ', 400);
     }
-    
+
     $id = (int)$input['id'];
     $action = isset($input['action']) ? $input['action'] : '';
-    
+
     // Handle approve action
     if ($action === 'approve') {
         $approver_id = isset($input['approver_id']) ? (int)$input['approver_id'] : null;
-        
+
         // Get approver name
         $approver_name = 'ไม่ระบุ';
         if ($approver_id) {
@@ -169,36 +194,36 @@ function updateBorrowRequest($conn, $input) {
                 $approver_name = $approver['fullname'];
             }
         }
-        
+
         // Start transaction for approve process
         $conn->beginTransaction();
-        
+
         try {
             // Get request details
             $requestStmt = $conn->prepare('SELECT * FROM borrow_requests WHERE id = ?');
             $requestStmt->execute([$id]);
             $request = $requestStmt->fetch(PDO::FETCH_ASSOC);
-            
+
             if (!$request) {
                 throw new Exception('ไม่พบคำขอยืม');
             }
-            
+
             // Get request items
             $itemsStmt = $conn->prepare('SELECT * FROM borrow_request_items WHERE request_id = ?');
             $itemsStmt->execute([$id]);
             $items = $itemsStmt->fetchAll(PDO::FETCH_ASSOC);
-            
+
             // Check equipment availability and create borrowing records
             foreach ($items as $item) {
                 // Check if equipment has enough quantity
                 $equipmentStmt = $conn->prepare('SELECT quantity_available FROM equipment WHERE id = ?');
                 $equipmentStmt->execute([$item['equipment_id']]);
                 $equipment = $equipmentStmt->fetch(PDO::FETCH_ASSOC);
-                
+
                 if (!$equipment || $equipment['quantity_available'] < $item['quantity_requested']) {
                     throw new Exception('อุปกรณ์ ID ' . $item['equipment_id'] . ' ไม่เพียงพอ');
                 }
-                
+
                 // Create borrowing record for each item
                 for ($i = 0; $i < $item['quantity_requested']; $i++) {
                     $borrowingStmt = $conn->prepare('
@@ -212,9 +237,9 @@ function updateBorrowRequest($conn, $input) {
                         $request['return_date'],
                         'อนุมัติโดย: ' . $approver_name
                     ]);
-                    
+
                     $borrowingId = dbLastInsertId($conn, 'borrowing');
-                    
+
                     // Create borrowing history record
                     $historyStmt = $conn->prepare('
                         INSERT INTO borrowing_history (borrowing_id, user_id, equipment_id, action, action_date, notes, approver_id, approver_name) 
@@ -229,7 +254,7 @@ function updateBorrowRequest($conn, $input) {
                         $approver_id,
                         $approver_name
                     ]);
-                    
+
                     // Update equipment quantity
                     $updateEquipmentStmt = $conn->prepare('
                         UPDATE equipment 
@@ -243,7 +268,7 @@ function updateBorrowRequest($conn, $input) {
                     ');
                     $updateEquipmentStmt->execute([$item['equipment_id']]);
                 }
-                
+
                 // Update approved quantity
                 $updateItemStmt = $conn->prepare('
                     UPDATE borrow_request_items 
@@ -252,7 +277,7 @@ function updateBorrowRequest($conn, $input) {
                 ');
                 $updateItemStmt->execute([$item['id']]);
             }
-            
+
             // Update request status
             $upd = $conn->prepare('UPDATE borrow_requests SET status = :status, approver_id = :approver_id, approver_name = :approver_name, approved_at = NOW() WHERE id = :id');
             $status = 'approved';
@@ -260,93 +285,96 @@ function updateBorrowRequest($conn, $input) {
             $upd->bindParam(':approver_id', $approver_id, PDO::PARAM_INT);
             $upd->bindParam(':approver_name', $approver_name, PDO::PARAM_STR);
             $upd->bindParam(':id', $id, PDO::PARAM_INT);
-            
+
             if (!$upd->execute()) {
                 throw new Exception('ไม่สามารถอัปเดตสถานะคำขอได้');
             }
-            
+
             $conn->commit();
-            
+
             // ส่ง email แจ้งเตือนผู้ใช้ (ไม่กระทบ flow หลัก)
             try {
                 Mailer::sendApprovalNotification($conn, $request, $items, $approver_name);
-            } catch (Throwable $mailErr) {
+            }
+            catch (Throwable $mailErr) {
                 error_log('Email notification failed: ' . $mailErr->getMessage());
             }
-            
+
             Response::success('อนุมัติคำขอสำเร็จ');
-            
-        } catch (Exception $e) {
+
+        }
+        catch (Exception $e) {
             $conn->rollBack();
             Response::error('ไม่สามารถอนุมัติคำขอได้: ' . $e->getMessage(), 500);
         }
         return;
     }
-    
+
     // Handle reject action
     if ($action === 'reject') {
-        $notes = isset($input['notes']) ? Security::sanitize($input['notes']) : 'ถูกปฏิเสธ';
-        
+        $notes = isset($input['notes']) ?Security::sanitize($input['notes']) : 'ถูกปฏิเสธ';
+
         $upd = $conn->prepare('UPDATE borrow_requests SET status = :status, notes = :notes WHERE id = :id');
         $status = 'rejected';
         $upd->bindParam(':status', $status, PDO::PARAM_STR);
         $upd->bindParam(':notes', $notes, PDO::PARAM_STR);
         $upd->bindParam(':id', $id, PDO::PARAM_INT);
-        
+
         if (!$upd->execute()) {
             Response::error('ไม่สามารถปฏิเสธคำขอได้', 500);
         }
-        
+
         // ส่ง email แจ้งเตือนผู้ใช้ (ไม่กระทบ flow หลัก)
         try {
             Mailer::sendRejectionNotification($conn, $id, $notes);
-        } catch (Throwable $mailErr) {
+        }
+        catch (Throwable $mailErr) {
             error_log('Email notification failed: ' . $mailErr->getMessage());
         }
-        
+
         Response::success('ปฏิเสธคำขอสำเร็จ');
         return;
     }
-    
+
     $stmt = $conn->prepare('SELECT id FROM borrow_requests WHERE id = ?');
     $stmt->bindParam(1, $id, PDO::PARAM_INT);
     $stmt->execute();
     if (!$stmt->fetch()) {
         Response::error('ไม่พบคำขอยืม', 404);
     }
-    
+
     $fields = [];
     $params = [':id' => $id];
-    
+
     $map = [
         'status' => PDO::PARAM_STR,
         'notes' => PDO::PARAM_STR,
         'borrow_date' => PDO::PARAM_STR,
         'return_date' => PDO::PARAM_STR,
     ];
-    
+
     foreach ($map as $key => $paramType) {
         if (array_key_exists($key, $input)) {
             $fields[] = "$key = :$key";
             $params[":" . $key] = $paramType === PDO::PARAM_INT ? (int)$input[$key] : Security::sanitize($input[$key]);
         }
     }
-    
+
     if (empty($fields)) {
         Response::error('ไม่มีข้อมูลที่ต้องการแก้ไข', 400);
     }
-    
+
     $sql = 'UPDATE borrow_requests SET ' . implode(', ', $fields) . ' WHERE id = :id';
     $upd = $conn->prepare($sql);
     foreach ($params as $k => $v) {
-        $type = is_int($v) ? PDO::PARAM_INT : PDO::PARAM_STR;
+        $type = is_int($v) ?PDO::PARAM_INT : PDO::PARAM_STR;
         $upd->bindValue($k, $v, $type);
     }
-    
+
     if (!$upd->execute()) {
         Response::error('ไม่สามารถแก้ไขคำขอได้', 500);
     }
-    
+
     $sel = $conn->prepare('SELECT id, status, notes, borrow_date, return_date, updated_at FROM borrow_requests WHERE id = :id');
     $sel->bindParam(':id', $id, PDO::PARAM_INT);
     $sel->execute();
@@ -354,26 +382,27 @@ function updateBorrowRequest($conn, $input) {
     Response::success('แก้ไขคำขอสำเร็จ', ['request' => $row]);
 }
 
-function deleteBorrowRequest($conn, $input) {
+function deleteBorrowRequest($conn, $input)
+{
     if (!isset($input['id']) || !is_numeric($input['id'])) {
         Response::error('ต้องระบุ ID คำขอ', 400);
     }
-    
+
     $id = (int)$input['id'];
-    
+
     $stmt = $conn->prepare('SELECT id FROM borrow_requests WHERE id = ?');
     $stmt->bindParam(1, $id, PDO::PARAM_INT);
     $stmt->execute();
     if (!$stmt->fetch()) {
         Response::error('ไม่พบคำขอยืม', 404);
     }
-    
+
     $del = $conn->prepare('DELETE FROM borrow_requests WHERE id = ?');
     $del->bindParam(1, $id, PDO::PARAM_INT);
     if (!$del->execute()) {
         Response::error('ไม่สามารถลบคำขอได้', 500);
     }
-    
+
     Response::success('ลบคำขอสำเร็จ');
 }
 ?>
