@@ -31,14 +31,16 @@ try {
     default:
       Response::error('ต้องระบุ type parameter (most_borrowed หรือ most_damaged)', 400);
   }
-} catch (Throwable $e) {
+}
+catch (Throwable $e) {
   error_log('Equipment Stats API error: ' . $e->getMessage());
   Response::error('Server error', 500);
 }
 
-function getMostBorrowedEquipment($conn) {
+function getMostBorrowedEquipment($conn)
+{
   $limit = (int)($_GET['limit'] ?? 5);
-  
+
   $query = "
     SELECT 
       e.id,
@@ -47,24 +49,24 @@ function getMostBorrowedEquipment($conn) {
       e.image_url,
       COUNT(b.id) as borrow_count
     FROM equipment e
-    LEFT JOIN borrowing b ON e.id = b.equipment_id 
+    INNER JOIN borrowing b ON e.id = b.equipment_id 
       AND b.status IN ('borrowed', 'returned')
     GROUP BY e.id, e.name, e.category, e.image_url
     ORDER BY borrow_count DESC, e.name ASC
-    LIMIT :limit
+    LIMIT $limit
   ";
-  
+
   $stmt = $conn->prepare($query);
-  $stmt->bindParam(':limit', $limit, PDO::PARAM_INT);
   $stmt->execute();
   $results = $stmt->fetchAll(PDO::FETCH_ASSOC);
-  
+
   Response::success('OK', ['equipment' => $results]);
 }
 
-function getMostDamagedEquipment($conn) {
+function getMostDamagedEquipment($conn)
+{
   $limit = (int)($_GET['limit'] ?? 5);
-  
+
   $query = "
     SELECT 
       e.id,
@@ -73,19 +75,17 @@ function getMostDamagedEquipment($conn) {
       e.image_url,
       COUNT(b.id) as damage_count
     FROM equipment e
-    LEFT JOIN borrowing b ON e.id = b.equipment_id 
+    INNER JOIN borrowing b ON e.id = b.equipment_id 
       AND b.status = 'lost'
     GROUP BY e.id, e.name, e.category, e.image_url
-    HAVING damage_count > 0
     ORDER BY damage_count DESC, e.name ASC
-    LIMIT :limit
+    LIMIT $limit
   ";
-  
+
   $stmt = $conn->prepare($query);
-  $stmt->bindParam(':limit', $limit, PDO::PARAM_INT);
   $stmt->execute();
   $results = $stmt->fetchAll(PDO::FETCH_ASSOC);
-  
+
   Response::success('OK', ['equipment' => $results]);
 }
 
