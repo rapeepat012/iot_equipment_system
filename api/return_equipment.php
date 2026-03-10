@@ -22,7 +22,8 @@ try {
     case 'GET':
       if (isset($_GET['borrowing_id'])) {
         getBorrowerDetails($conn, (int)$_GET['borrowing_id']);
-      } else {
+      }
+      else {
         listActiveBorrowers($conn);
       }
       break;
@@ -32,13 +33,15 @@ try {
     default:
       Response::error('Method not allowed', 405);
   }
-} catch (Throwable $e) {
+}
+catch (Throwable $e) {
   error_log('Return Equipment API error: ' . $e->getMessage());
   Response::error('Server error: ' . $e->getMessage(), 500);
 }
 
 
-function listActiveBorrowers(PDO $conn) {
+function listActiveBorrowers(PDO $conn)
+{
   $driver = $conn->getAttribute(PDO::ATTR_DRIVER_NAME);
   $warningDateExpr = $driver === 'pgsql'
     ? "NOW() + INTERVAL '3 days'"
@@ -81,10 +84,11 @@ function listActiveBorrowers(PDO $conn) {
   ");
   $stmt->execute();
   $borrowers = $stmt->fetchAll(PDO::FETCH_ASSOC);
-  
+
   Response::success('ดึงข้อมูลผู้ยืมสำเร็จ', ['borrowers' => $borrowers]);
 }
-function getBorrowerDetails(PDO $conn, int $borrowingId) {
+function getBorrowerDetails(PDO $conn, int $borrowingId)
+{
   $driver = $conn->getAttribute(PDO::ATTR_DRIVER_NAME);
   $borrowingIdsExpr = $driver === 'pgsql'
     ? "STRING_AGG(b.id::text, ',')"
@@ -104,11 +108,11 @@ function getBorrowerDetails(PDO $conn, int $borrowingId) {
   ");
   $mainBorrowingStmt->execute([$borrowingId]);
   $mainBorrowing = $mainBorrowingStmt->fetch(PDO::FETCH_ASSOC);
-  
+
   if (!$mainBorrowing) {
     Response::error('ไม่พบข้อมูลการยืม', 404);
   }
-  
+
   $itemsStmt = $conn->prepare("
     SELECT 
       e.id as equipment_id,
@@ -134,37 +138,38 @@ function getBorrowerDetails(PDO $conn, int $borrowingId) {
     $mainBorrowing['due_date']
   ]);
   $items = $itemsStmt->fetchAll(PDO::FETCH_ASSOC);
-  
+
   $user = [
     'id' => $mainBorrowing['user_id'],
     'fullname' => $mainBorrowing['fullname'],
     'student_id' => $mainBorrowing['student_id'],
     'email' => $mainBorrowing['email']
   ];
-  
+
   Response::success('ดึงข้อมูลรายละเอียดสำเร็จ', [
     'user' => $user,
     'items' => $items
   ]);
 }
-function returnEquipment(PDO $conn, array $input) {
+function returnEquipment(PDO $conn, array $input)
+{
   // ตรวจสอบข้อมูลที่จำเป็น
   if (!isset($input['borrowing_id']) || !isset($input['items']) || !is_array($input['items'])) {
     Response::error('ข้อมูลไม่ครบถ้วน', 400);
   }
-  
+
   $borrowingId = (int)$input['borrowing_id'];
   $items = $input['items'];
   $staffId = isset($input['staff_id']) ? (int)$input['staff_id'] : null;
-  $staffName = isset($input['staff_name']) ? Security::sanitize($input['staff_name']) : 'เจ้าหน้าที่';
-  
+  $staffName = isset($input['staff_name']) ?Security::sanitize($input['staff_name']) : 'เจ้าหน้าที่';
+
   $conn->beginTransaction();
-  
+
   try {
     $totalReturned = 0;
     $totalDamaged = 0;
     $totalLost = 0;
-    
+
     // ดึงข้อมูลการยืมหลักเพื่อหา user_id, borrow_date, due_date
     $mainBorrowingStmt = $conn->prepare("
       SELECT user_id, borrow_date, due_date FROM borrowing 
@@ -172,22 +177,22 @@ function returnEquipment(PDO $conn, array $input) {
     ");
     $mainBorrowingStmt->execute([$borrowingId]);
     $mainBorrowing = $mainBorrowingStmt->fetch(PDO::FETCH_ASSOC);
-    
+
     if (!$mainBorrowing) {
       Response::error('ไม่พบข้อมูลการยืม', 404);
     }
-    
+
     $userId = $mainBorrowing['user_id'];
     $borrowDate = $mainBorrowing['borrow_date'];
     $dueDate = $mainBorrowing['due_date'];
-    
+
     foreach ($items as $item) {
       $equipmentId = (int)$item['equipment_id'];
       $quantityReturned = (int)($item['quantity_returned'] ?? 0);
       $quantityDamaged = (int)($item['quantity_damaged'] ?? 0);
       $quantityLost = (int)($item['quantity_lost'] ?? 0);
-      $notes = isset($item['notes']) ? Security::sanitize($item['notes']) : '';
-      
+      $notes = isset($item['notes']) ?Security::sanitize($item['notes']) : '';
+
       // ดึงรายการ borrowing ของอุปกรณ์นี้ในคำขอเดียวกัน
       $borrowingStmt = $conn->prepare("
         SELECT id FROM borrowing 
@@ -196,117 +201,94 @@ function returnEquipment(PDO $conn, array $input) {
       ");
       $borrowingStmt->execute([$userId, $equipmentId, $borrowDate, $dueDate]);
       $borrowingRecords = $borrowingStmt->fetchAll(PDO::FETCH_ASSOC);
-      
+
       $totalQuantity = count($borrowingRecords);
       $processedCount = 0;
-      
+
+      // Batch collect IDs and histories
+      $returnedIds = [];
+      $damagedIds = [];
+      $lostIds = [];
+
+      $historyInserts = [];
+      $historyParams = [];
+
       // อัปเดตสถานะการยืม - คืนปกติ
       for ($i = 0; $i < $quantityReturned && $processedCount < $totalQuantity; $i++) {
         $currentBorrowingId = $borrowingRecords[$processedCount]['id'];
-        
-        $updateStmt = $conn->prepare("
-          UPDATE borrowing 
-          SET status = 'returned', return_date = NOW()
-          WHERE id = ?
-        ");
-        $updateStmt->execute([$currentBorrowingId]);
-        
-        // บันทึกประวัติการคืน
-        $historyStmt = $conn->prepare("
-          INSERT INTO borrowing_history 
-          (borrowing_id, user_id, equipment_id, action, action_date, notes, approver_id, approver_name) 
-          VALUES (?, ?, ?, 'return', NOW(), ?, ?, ?)
-        ");
-        $historyStmt->execute([
-          $currentBorrowingId,
-          $userId,
-          $equipmentId,
-          'คืนปกติ' . ($notes ? ' - ' . $notes : ''),
-          $staffId,
-          $staffName
-        ]);
-        
-        // เพิ่มจำนวนอุปกรณ์กลับ
+        $returnedIds[] = $currentBorrowingId;
+
+        $historyInserts[] = "(?, ?, ?, 'return', NOW(), ?, ?, ?)";
+        array_push($historyParams, $currentBorrowingId, $userId, $equipmentId, 'คืนปกติ' . ($notes ? ' - ' . $notes : ''), $staffId, $staffName);
+
+        $processedCount++;
+        $totalReturned++;
+      }
+
+      // อัปเดตสถานะการยืม - เสียหาย
+      for ($i = 0; $i < $quantityDamaged && $processedCount < $totalQuantity; $i++) {
+        $currentBorrowingId = $borrowingRecords[$processedCount]['id'];
+        $damagedIds[] = $currentBorrowingId; // Same returned status, different history/note
+
+        $historyInserts[] = "(?, ?, ?, 'return', NOW(), ?, ?, ?)";
+        array_push($historyParams, $currentBorrowingId, $userId, $equipmentId, 'คืนชำรุด/เสียหาย - ' . $notes, $staffId, $staffName);
+
+        $processedCount++;
+        $totalDamaged++;
+      }
+
+      // อัปเดตสถานะการยืม - หาย
+      for ($i = 0; $i < $quantityLost && $processedCount < $totalQuantity; $i++) {
+        $currentBorrowingId = $borrowingRecords[$processedCount]['id'];
+        $lostIds[] = $currentBorrowingId;
+
+        $historyInserts[] = "(?, ?, ?, 'lost', NOW(), ?, ?, ?)";
+        array_push($historyParams, $currentBorrowingId, $userId, $equipmentId, 'อุปกรณ์สูญหาย - ' . $notes, $staffId, $staffName);
+
+        $processedCount++;
+        $totalLost++;
+      }
+
+      // Execute Batch Updates for Borrowing Status
+      $allReturnedIds = array_merge($returnedIds, $damagedIds);
+      if (!empty($allReturnedIds)) {
+        $placeholders = implode(',', array_fill(0, count($allReturnedIds), '?'));
+        $updateStmt = $conn->prepare("UPDATE borrowing SET status = 'returned', return_date = NOW() WHERE id IN ($placeholders)");
+        $updateStmt->execute($allReturnedIds);
+      }
+
+      if (!empty($lostIds)) {
+        $placeholders = implode(',', array_fill(0, count($lostIds), '?'));
+        $updateStmt = $conn->prepare("UPDATE borrowing SET status = 'lost', return_date = NOW() WHERE id IN ($placeholders)");
+        $updateStmt->execute($lostIds);
+      }
+
+      // Execute Batch Insert for History
+      if (!empty($historyInserts)) {
+        $sql = "INSERT INTO borrowing_history (borrowing_id, user_id, equipment_id, action, action_date, notes, approver_id, approver_name) VALUES " . implode(', ', $historyInserts);
+        $historyStmt = $conn->prepare($sql);
+        $historyStmt->execute($historyParams);
+      }
+
+      // Update total equipment available quantity (bulk addition for standard returned items)
+      if ($quantityReturned > 0) {
         $equipmentStmt = $conn->prepare("
           UPDATE equipment 
-          SET quantity_available = quantity_available + 1,
+          SET quantity_available = quantity_available + ?,
               status = CASE 
-                WHEN quantity_available + 1 >= quantity_total THEN 'available'
-                WHEN quantity_available + 1 > 5 THEN 'available'
-                WHEN quantity_available + 1 > 0 THEN 'limited'
+                WHEN quantity_available + ? >= quantity_total THEN 'available'
+                WHEN quantity_available + ? > 5 THEN 'available'
+                WHEN quantity_available + ? > 0 THEN 'limited'
                 ELSE 'unavailable'
               END
           WHERE id = ?
         ");
-        $equipmentStmt->execute([$equipmentId]);
-        
-        $processedCount++;
-        $totalReturned++;
-      }
-      
-      // อัปเดตสถานะการยืม - เสียหาย
-      for ($i = 0; $i < $quantityDamaged && $processedCount < $totalQuantity; $i++) {
-        $currentBorrowingId = $borrowingRecords[$processedCount]['id'];
-        
-        $updateStmt = $conn->prepare("
-          UPDATE borrowing 
-          SET status = 'returned', return_date = NOW()
-          WHERE id = ?
-        ");
-        $updateStmt->execute([$currentBorrowingId]);
-        
-        // บันทึกประวัติการคืน
-        $historyStmt = $conn->prepare("
-          INSERT INTO borrowing_history 
-          (borrowing_id, user_id, equipment_id, action, action_date, notes, approver_id, approver_name) 
-          VALUES (?, ?, ?, 'return', NOW(), ?, ?, ?)
-        ");
-        $historyStmt->execute([
-          $currentBorrowingId,
-          $userId,
-          $equipmentId,
-          'คืนชำรุด/เสียหาย - ' . $notes,
-          $staffId,
-          $staffName
-        ]);
-        
-        $processedCount++;
-        $totalDamaged++;
-      }
-      
-      // อัปเดตสถานะการยืม - หาย
-      for ($i = 0; $i < $quantityLost && $processedCount < $totalQuantity; $i++) {
-        $currentBorrowingId = $borrowingRecords[$processedCount]['id'];
-        
-        $updateStmt = $conn->prepare("
-          UPDATE borrowing 
-          SET status = 'lost', return_date = NOW()
-          WHERE id = ?
-        ");
-        $updateStmt->execute([$currentBorrowingId]);
-        
-        // บันทึกประวัติการคืน
-        $historyStmt = $conn->prepare("
-          INSERT INTO borrowing_history 
-          (borrowing_id, user_id, equipment_id, action, action_date, notes, approver_id, approver_name) 
-          VALUES (?, ?, ?, 'lost', NOW(), ?, ?, ?)
-        ");
-        $historyStmt->execute([
-          $currentBorrowingId,
-          $userId,
-          $equipmentId,
-          'อุปกรณ์สูญหาย - ' . $notes,
-          $staffId,
-          $staffName
-        ]);
-        
-        $processedCount++;
-        $totalLost++;
+        $equipmentStmt->execute([$quantityReturned, $quantityReturned, $quantityReturned, $quantityReturned, $equipmentId]);
       }
     }
-    
+
     $conn->commit();
-    
+
     Response::success('บันทึกการคืนอุปกรณ์สำเร็จ', [
       'summary' => [
         'total_returned' => $totalReturned,
@@ -314,8 +296,9 @@ function returnEquipment(PDO $conn, array $input) {
         'total_lost' => $totalLost
       ]
     ]);
-    
-  } catch (Exception $e) {
+
+  }
+  catch (Exception $e) {
     $conn->rollBack();
     throw $e;
   }
