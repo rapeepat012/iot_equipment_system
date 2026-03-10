@@ -500,7 +500,7 @@ export const Dashboard: React.FC = () => {
           <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-6 animate-fade-in-up" style={{ animationDelay: '800ms' }}>
             <h3 className="text-lg font-semibold text-gray-900 mb-4 flex items-center gap-2">
               <Activity className="h-5 w-5 text-red-500" />
-              อุปกรณ์เสียหายเยอะที่สุด (Top 5)
+              อุปกรณ์ศูนย์หายเยอะที่สุด (Top 5)
             </h3>
             <div className="space-y-3">
               {statsLoading ? (
